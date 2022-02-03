@@ -130,14 +130,52 @@ interface IUniswapV2Pair {
         );
 }
 
+//https://github.com/Uniswap/v2-periphery/blob/master/contracts/interfaces/IUniswapV2Router02.sol
+//https://docs.uniswap.org/protocol/V2/reference/smart-contracts/router-02
+interface IUniswapV2Router02 {
+    function WETH () external returns (address);
+    function swapTokensForExactETH(uint amountOut, uint amountInMax, address[] calldata path, address to, uint deadline)
+        external
+        returns (uint[] memory amounts);
+    function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline)
+        external
+        returns (uint[] memory amounts);
+    function swapTokensForExactTokens(
+        uint amountOut,
+        uint amountInMax,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external returns (uint[] memory amounts);
+}
+
 // ----------------------IMPLEMENTATION------------------------------
 
 contract LiquidationOperator is IUniswapV2Callee {
     uint8 public constant health_factor_decimals = 18;
 
-    // TODO: define constants used in the contract including ERC-20 tokens, Uniswap Pairs, Aave lending pools, etc. */
-    //    *** Your code here ***
-    // END TODO
+    //  define constants used in the contract including ERC-20 tokens, Uniswap Pairs, Aave lending pools, etc. */
+    uint8 public constant wei_decimals = 18;
+    uint8 public constant wbtc_decimals = 8;
+    uint8 public constant usdt_decimals = 18;
+	
+	uint64 private constant blockNumber = 1621761058;
+	
+    address private constant lendingPoolAddress = 0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9; // Aave v2 market - mainnet
+    address private constant uniswapV2FactoryAddress = 0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f;
+    address private constant uniswapV2RouterAddress = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
+	
+    address private constant WBTCAddress = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
+    address private constant USDTAddress = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
+    address private constant WETHAddress = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+	
+    address private constant liqUserAddress = 0x59CE4a2AC5bC3f5F225439B2993b86B42f6d3e9F;
+	
+	ILendingPool lendingPool = ILendingPool(lendingPoolAddress);
+	IUniswapV2Router02 router = IUniswapV2Router02(uniswapV2RouterAddress);
+	IERC20 WBTC = IERC20(WBTCAddress);
+	IERC20 USDT = IERC20(USDTAddress);
+	IWETH WETH = IWETH(WETHAddress);
 
     // some helper function, it is totally fine if you can finish the lab without using these function
     // https://github.com/Uniswap/v2-periphery/blob/master/contracts/libraries/UniswapV2Library.sol
@@ -184,7 +222,9 @@ contract LiquidationOperator is IUniswapV2Callee {
     }
 
     // TODO: add a `receive` function so that you can withdraw your WETH
-    //   *** Your code here ***
+    receive() external payable {
+		
+	}
     // END TODO
 
     // required by the testing script, entry for your liquidation call
@@ -192,23 +232,84 @@ contract LiquidationOperator is IUniswapV2Callee {
         // TODO: implement your liquidation logic
 
         // 0. security checks and initializing variables
-        //    *** Your code here ***
 
         // 1. get the target user account data & make sure it is liquidatable
-        //    *** Your code here ***
-
+		console.log("1.Querying user health factor after liquidation");
+        bool userIsLiquidatable = checkUserLiquidationStatus(liqUserAddress);
+		require(userIsLiquidatable);		
+		
         // 2. call flash swap to liquidate the target user
         // based on https://etherscan.io/tx/0xac7df37a43fab1b130318bbb761861b8357650db2e2c6493b73d6da3d9581077
         // we know that the target user borrowed USDT with WBTC as collateral
         // we should borrow USDT, liquidate the target user and get the WBTC, then swap WBTC to repay uniswap
         // (please feel free to develop other workflows as long as they liquidate the target user successfully)
-        //    *** Your code here ***
+        console.log("2.Making a WETH-USDT pair flashswap with uniswap 2.0");
+		IUniswapV2Factory uV2Factory = IUniswapV2Factory(uniswapV2FactoryAddress);
+		address WETHUSDTPairAddress = uV2Factory.getPair(WETHAddress, USDTAddress);
+		IUniswapV2Pair WETHUSDTPair = IUniswapV2Pair (WETHUSDTPairAddress);
+		uint256 debtToCoverUSDT = 2000000000000;
+		WETHUSDTPair.swap(0, debtToCoverUSDT, address(this), " ");
 
         // 3. Convert the profit into ETH and send back to sender
-        //    *** Your code here ***
-
+		console.log("3.Converting the profit into ETH and sending back to sender");		
+        uint256 balanceWBTC = WBTC.balanceOf(address(this));
+		uint256 balanceWETH = WETH.balanceOf(address(this));
+        console.log("--WETH balance in the contract now: %s(%s.%s)", balanceWETH, balanceWETH/(10**wei_decimals), balanceWETH%(10**wei_decimals));  
+		console.log("--WBTC balance in the contract now: %s(%s.%s)", balanceWBTC, balanceWBTC/(10**wbtc_decimals), balanceWBTC%(10**wbtc_decimals));
+		console.log("--Swapping to ETH, sending to caller");
+		
+		address[] memory path = new address[](2);
+        path[0] = WBTCAddress;
+        path[1] =  WETHAddress;		
+        router.swapExactTokensForETH(balanceWBTC, 0, path, msg.sender, blockNumber);
+		
+		WETH.withdraw(balanceWETH);
+        payable(msg.sender).transfer (balanceWETH);
+					
+        balanceWBTC = WBTC.balanceOf(address(this));
+		balanceWETH = WETH.balanceOf(address(this));
+        console.log("--WETH balance in the contract now: %s(%s.%s)", balanceWETH, balanceWETH/(10**wei_decimals), balanceWETH%(10**wei_decimals)); 
+		console.log("--WBTC balance in the contract now: %s(%s.%s)", balanceWBTC, balanceWBTC/(10**wbtc_decimals), balanceWBTC%(10**wbtc_decimals));       
+        
+		console.log("4.Querying user health factor after liquidation");
+		userIsLiquidatable = checkUserLiquidationStatus(liqUserAddress);
+		require(!userIsLiquidatable);
         // END TODO
     }
+	
+	function checkUserLiquidationStatus(address userAddress) internal view returns (bool userIsLiquidatable ) {
+		uint256 totalCollateralETH;
+		uint256 totalDebtETH;
+		uint256 availableBorrowsETH;
+		uint256 currentLiquidationThreshold;
+		uint256 ltv;
+		uint256 healthFactor;
+		
+		(
+            totalCollateralETH,
+            totalDebtETH,
+            availableBorrowsETH,
+            currentLiquidationThreshold,
+            ltv,
+            healthFactor
+        ) = lendingPool.getUserAccountData(userAddress);
+		
+		bool userLiquidatable = healthFactor < 10**health_factor_decimals;
+		
+		console.log("--Health factor: %s, user is liquidatable: %s", 
+			healthFactor, userLiquidatable);
+		console.log("--Total ETH debt %s, total ETH collateral %s", 
+			totalDebtETH, totalCollateralETH);
+		console.log("--Normalized Total ETH debt %s.%s", 
+			totalDebtETH / (10**wei_decimals),totalDebtETH % (10**wei_decimals));
+		console.log("--Normalized total ETH collateral %s.%s", 
+			totalCollateralETH / (10**wei_decimals), totalCollateralETH % (10**wei_decimals));
+		console.log("--Normalized Health factor: %s.%s", 
+			 healthFactor / (10**health_factor_decimals), healthFactor % (10**health_factor_decimals));
+			 
+		return userLiquidatable;
+	}
+	
 
     // required by the swap
     function uniswapV2Call(
@@ -220,13 +321,22 @@ contract LiquidationOperator is IUniswapV2Callee {
         // TODO: implement your liquidation logic
 
         // 2.0. security checks and initializing variables
-        //    *** Your code here ***
+        USDT.approve(lendingPoolAddress, 2**256-1);
+		(uint112 reserve0, uint112 reserve1, ) = IUniswapV2Pair(msg.sender).getReserves();
+        WBTC.approve(uniswapV2RouterAddress, 2**256-1);
 
-        // 2.1 liquidate the target user
-        //    *** Your code here ***
-
-        // 2.2 swap WBTC for other things or repay directly
-        //    *** Your code here ***
+        // 2.1 liquidate the target user		
+        lendingPool.liquidationCall(WBTCAddress, USDTAddress, liqUserAddress, amount1, false);
+		
+        // 2.2 swap WBTC for other things or repay directly				
+		uint256 amountIn = getAmountIn (amount1, reserve0, reserve1);
+        address[] memory path = new address[](2);
+        path[0] = WBTCAddress;
+        path[1] = WETHAddress;		
+		console.log("--FlahsSwap reserve ETH: %s(%s.%s),", reserve0, reserve0 / (10**wei_decimals), reserve0 % (10**wei_decimals));
+		console.log("--FlahsSwap reserve USDT: %s(%s.%s)", reserve1, reserve1 / (10**usdt_decimals), reserve1 % (10**usdt_decimals));
+		console.log("--FlahsSwap In amount ETH: %s(%s.%s)", amountIn, amountIn / (10**wei_decimals), amountIn % (10**wei_decimals));
+        router.swapTokensForExactTokens(amountIn, 2**256-1, path, msg.sender, blockNumber);
 
         // 2.3 repay
         //    *** Your code here ***
