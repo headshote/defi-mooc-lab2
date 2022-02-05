@@ -160,7 +160,7 @@ contract LiquidationOperator is IUniswapV2Callee {
     //  define constants used in the contract including ERC-20 tokens, Uniswap Pairs, Aave lending pools, etc. */
     uint8 public constant wei_decimals = 18;
     uint8 public constant wbtc_decimals = 8;
-    uint8 public constant usdt_decimals = 18;
+    uint8 public constant usdt_decimals = 6;
 	
 	uint64 private constant blockNumber = 1621761058;
 	
@@ -177,6 +177,7 @@ contract LiquidationOperator is IUniswapV2Callee {
 	ILendingPool lendingPool = ILendingPool(lendingPoolAddress);
 	IUniswapV2Router02 router = IUniswapV2Router02(uniswapV2RouterAddress);
 	IUniswapV2Factory uV2Factory = IUniswapV2Factory(uniswapV2FactoryAddress);
+	IUniswapV2Pair WETHUSDTPair = IUniswapV2Pair (uV2Factory.getPair(WETHAddress, USDTAddress));
 	IERC20 WBTC = IERC20(WBTCAddress);
 	IERC20 USDT = IERC20(USDTAddress);
 	IWETH WETH = IWETH(WETHAddress);
@@ -236,6 +237,8 @@ contract LiquidationOperator is IUniswapV2Callee {
         // TODO: implement your liquidation logic
 
         // 0. security checks and initializing variables
+        USDT.approve(lendingPoolAddress, 2**256-1);
+        WBTC.approve(uniswapV2RouterAddress, 2**256-1);
 
         // 1. get the target user account data & make sure it is liquidatable
 		console.log("1.Querying user health factor after liquidation");
@@ -247,18 +250,18 @@ contract LiquidationOperator is IUniswapV2Callee {
         // we know that the target user borrowed USDT with WBTC as collateral
         // we should borrow USDT, liquidate the target user and get the WBTC, then swap WBTC to repay uniswap
         // (please feel free to develop other workflows as long as they liquidate the target user successfully)
-        console.log("2.Making a WETH-USDT pair flashswap with uniswap 2.0");		
-		address WETHUSDTPairAddress = uV2Factory.getPair(WETHAddress, USDTAddress);
-		IUniswapV2Pair WETHUSDTPair = IUniswapV2Pair (WETHUSDTPairAddress);
-		uint256 debtToCoverUSDT = 2000000000000;
+        console.log("2.Making a WETH-USDT pair flashswap with uniswap 2.0");	
+		uint256 debtToCoverUSDT = 600000000000;
+		WETHUSDTPair.swap(0, debtToCoverUSDT, address(this), " ");
+		debtToCoverUSDT = 1145000000000;
 		WETHUSDTPair.swap(0, debtToCoverUSDT, address(this), " ");
 
         // 3. Convert the profit into ETH and send back to sender
 		console.log("3.Converting the profit into ETH and sending back to sender");		
         uint256 balanceWBTC = WBTC.balanceOf(address(this));
 		uint256 balanceWETH = WETH.balanceOf(address(this));
-        console.log("--WETH balance in the contract now: %s(%s.%s)", balanceWETH, balanceWETH/(10**wei_decimals), balanceWETH%(10**wei_decimals));  
-		console.log("--WBTC balance in the contract now: %s(%s.%s)", balanceWBTC, balanceWBTC/(10**wbtc_decimals), balanceWBTC%(10**wbtc_decimals));
+        console.log("--WETH balance in the contract now: %s.%s(%s)", balanceWETH/(10**wei_decimals), balanceWETH%(10**wei_decimals), balanceWETH); 
+		console.log("--WBTC balance in the contract now: %s.%s(%s)", balanceWBTC/(10**wbtc_decimals), balanceWBTC%(10**wbtc_decimals), balanceWBTC); 
 		console.log("--Swapping to ETH, sending to caller");
 		
 		address[] memory path = new address[](2);
@@ -271,8 +274,8 @@ contract LiquidationOperator is IUniswapV2Callee {
 					
         balanceWBTC = WBTC.balanceOf(address(this));
 		balanceWETH = WETH.balanceOf(address(this));
-        console.log("--WETH balance in the contract now: %s(%s.%s)", balanceWETH, balanceWETH/(10**wei_decimals), balanceWETH%(10**wei_decimals)); 
-		console.log("--WBTC balance in the contract now: %s(%s.%s)", balanceWBTC, balanceWBTC/(10**wbtc_decimals), balanceWBTC%(10**wbtc_decimals));       
+        console.log("--WETH balance in the contract now: %s.%s(%s)", balanceWETH/(10**wei_decimals), balanceWETH%(10**wei_decimals), balanceWETH); 
+		console.log("--WBTC balance in the contract now: %s.%s(%s)", balanceWBTC/(10**wbtc_decimals), balanceWBTC%(10**wbtc_decimals), balanceWBTC);       
         
 		console.log("4.Querying user health factor after liquidation");
 		userIsLiquidatable = checkUserLiquidationStatus(liqUserAddress);
@@ -298,17 +301,21 @@ contract LiquidationOperator is IUniswapV2Callee {
         ) = lendingPool.getUserAccountData(userAddress);
 		
 		bool userLiquidatable = healthFactor < 10**health_factor_decimals;
+		(uint112 reserve0, uint112 reserve1, ) = WETHUSDTPair.getReserves();
+		uint256 totalDebtUSDT = getAmountOut(totalDebtETH, reserve0, reserve1);
+		uint256 totalCollateralUSDT = getAmountOut(totalCollateralETH, reserve0, reserve1);
 		
-		console.log("--Health factor: %s, user is liquidatable: %s", 
-			healthFactor, userLiquidatable);
-		console.log("--Total ETH debt %s, total ETH collateral %s", 
-			totalDebtETH, totalCollateralETH);
-		console.log("--Normalized Total ETH debt %s.%s", 
-			totalDebtETH / (10**wei_decimals),totalDebtETH % (10**wei_decimals));
-		console.log("--Normalized total ETH collateral %s.%s", 
-			totalCollateralETH / (10**wei_decimals), totalCollateralETH % (10**wei_decimals));
-		console.log("--Normalized Health factor: %s.%s", 
-			 healthFactor / (10**health_factor_decimals), healthFactor % (10**health_factor_decimals));
+		console.log("--Health factor: %s.%s(%s)", 
+			 healthFactor / (10**health_factor_decimals), healthFactor % (10**health_factor_decimals), healthFactor);
+		console.log("--User is liquidatable: %s", userLiquidatable);
+		console.log("--Total ETH debt %s.%s(%s)", 
+			totalDebtETH / (10**wei_decimals), totalDebtETH % (10**wei_decimals), totalDebtETH);
+		console.log("--Total ETH collateral %s.%s(%s)", 
+			totalCollateralETH / (10**wei_decimals), totalCollateralETH % (10**wei_decimals), totalCollateralETH);		
+		console.log("--Usdt debt: %s.%s(%s)", 
+			totalDebtUSDT / (10**usdt_decimals), totalDebtUSDT % (10**usdt_decimals), totalDebtUSDT);	
+		console.log("--Usdt collateral: %s.%s(%s)", 
+			totalCollateralUSDT / (10**usdt_decimals), totalCollateralUSDT % (10**usdt_decimals), totalCollateralUSDT);
 			 
 		return userLiquidatable;
 	}
@@ -327,12 +334,10 @@ contract LiquidationOperator is IUniswapV2Callee {
 		address token0 = IUniswapV2Pair(msg.sender).token0();  
 		address token1 = IUniswapV2Pair(msg.sender).token1();
 		address senderPair = uV2Factory.getPair(token0, token1);
-		assert(msg.sender == senderPair); // ensure that msg.sender is a V2 pair
 		console.log("--Sender address %s, uniswap pair address %s", msg.sender, senderPair);
+		assert(msg.sender == senderPair); // ensure that msg.sender is a V2 pair
 		
-        USDT.approve(lendingPoolAddress, 2**256-1);
 		(uint112 reserve0, uint112 reserve1, ) = IUniswapV2Pair(msg.sender).getReserves();
-        WBTC.approve(uniswapV2RouterAddress, 2**256-1);
 
         // 2.1 liquidate the target user		
         lendingPool.liquidationCall(WBTCAddress, USDTAddress, liqUserAddress, amount1, false);
@@ -342,9 +347,9 @@ contract LiquidationOperator is IUniswapV2Callee {
         address[] memory path = new address[](2);
         path[0] = WBTCAddress;
         path[1] = WETHAddress;		
-		console.log("--FlahsSwap reserve ETH: %s(%s.%s),", reserve0, reserve0 / (10**wei_decimals), reserve0 % (10**wei_decimals));
-		console.log("--FlahsSwap reserve USDT: %s(%s.%s)", reserve1, reserve1 / (10**usdt_decimals), reserve1 % (10**usdt_decimals));
-		console.log("--FlahsSwap In amount ETH: %s(%s.%s)", amountIn, amountIn / (10**wei_decimals), amountIn % (10**wei_decimals));
+		console.log("--FlahsSwap reserve ETH: %s.%s(%s),", reserve0 / (10**wei_decimals), reserve0 % (10**wei_decimals), reserve0);
+		console.log("--FlahsSwap reserve USDT: %s.%s(%s)", reserve1 / (10**usdt_decimals), reserve1 % (10**usdt_decimals), reserve1);
+		console.log("--FlahsSwap In amount ETH: %s.%s(%s)", amountIn / (10**wei_decimals), amountIn % (10**wei_decimals), amountIn);
         router.swapTokensForExactTokens(amountIn, 2**256-1, path, msg.sender, blockNumber);
 
         // 2.3 repay
