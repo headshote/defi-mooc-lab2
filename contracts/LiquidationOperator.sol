@@ -104,6 +104,9 @@ interface IUniswapV2Factory {
 // https://github.com/Uniswap/v2-core/blob/master/contracts/interfaces/IUniswapV2Pair.sol
 // https://docs.uniswap.org/protocol/V2/reference/smart-contracts/pair
 interface IUniswapV2Pair {
+    function token0() external view returns (address);
+    function token1() external view returns (address);
+	
     /**
      * Swaps tokens. For regular swaps, data.length must be 0.
      * Also see [Flash Swaps](https://docs.uniswap.org/protocol/V2/concepts/core-concepts/flash-swaps).
@@ -173,6 +176,7 @@ contract LiquidationOperator is IUniswapV2Callee {
 	
 	ILendingPool lendingPool = ILendingPool(lendingPoolAddress);
 	IUniswapV2Router02 router = IUniswapV2Router02(uniswapV2RouterAddress);
+	IUniswapV2Factory uV2Factory = IUniswapV2Factory(uniswapV2FactoryAddress);
 	IERC20 WBTC = IERC20(WBTCAddress);
 	IERC20 USDT = IERC20(USDTAddress);
 	IWETH WETH = IWETH(WETHAddress);
@@ -243,8 +247,7 @@ contract LiquidationOperator is IUniswapV2Callee {
         // we know that the target user borrowed USDT with WBTC as collateral
         // we should borrow USDT, liquidate the target user and get the WBTC, then swap WBTC to repay uniswap
         // (please feel free to develop other workflows as long as they liquidate the target user successfully)
-        console.log("2.Making a WETH-USDT pair flashswap with uniswap 2.0");
-		IUniswapV2Factory uV2Factory = IUniswapV2Factory(uniswapV2FactoryAddress);
+        console.log("2.Making a WETH-USDT pair flashswap with uniswap 2.0");		
 		address WETHUSDTPairAddress = uV2Factory.getPair(WETHAddress, USDTAddress);
 		IUniswapV2Pair WETHUSDTPair = IUniswapV2Pair (WETHUSDTPairAddress);
 		uint256 debtToCoverUSDT = 2000000000000;
@@ -321,6 +324,12 @@ contract LiquidationOperator is IUniswapV2Callee {
         // TODO: implement your liquidation logic
 
         // 2.0. security checks and initializing variables
+		address token0 = IUniswapV2Pair(msg.sender).token0();  
+		address token1 = IUniswapV2Pair(msg.sender).token1();
+		address senderPair = uV2Factory.getPair(token0, token1);
+		assert(msg.sender == senderPair); // ensure that msg.sender is a V2 pair
+		console.log("--Sender address %s, uniswap pair address %s", msg.sender, senderPair);
+		
         USDT.approve(lendingPoolAddress, 2**256-1);
 		(uint112 reserve0, uint112 reserve1, ) = IUniswapV2Pair(msg.sender).getReserves();
         WBTC.approve(uniswapV2RouterAddress, 2**256-1);
