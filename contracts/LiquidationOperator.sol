@@ -252,7 +252,7 @@ contract LiquidationOperator is IUniswapV2Callee {
         // (please feel free to develop other workflows as long as they liquidate the target user successfully)
         console.log("2.Making a WETH-USDT pair flashswap with uniswap 2.0, and making the liquidation calls inside callback");	
         console.log("2.1.First flash swap");	
-		uint256 debtToCoverUSDT = 600000000000;
+		uint256 debtToCoverUSDT = 600000000000; //$600k bring health factor to 0.999+
 		WETHUSDTPair.swap(0, debtToCoverUSDT, address(this), " ");
 		
 		console.log("2.2.Querying user health factor after the first liquidation");
